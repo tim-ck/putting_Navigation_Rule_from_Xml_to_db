@@ -48,8 +48,10 @@ public class NavigationRuleService {
     @Autowired
     private NavigationRuleRepository repository;
 
-    public List<NavigationRule> getNavigationRules(String fromViewId) {
-        return repository.findByFromViewId(fromViewId);
+    public List<NavigationRule> getNavigationRules(String fromViewId, Strign outcome) {
+        NavigationRule criteria = new NavigationRule();
+        //set criteria...
+        return repository.firstResultByCriteria(criteria);
     }
 }
 ```
@@ -59,38 +61,58 @@ Extend `ConfigurableNavigationHandler` to create a custom navigation handler.
 ```java
 @ManagedBean
 public class CustomNavigationHandler extends ConfigurableNavigationHandler {
-
-    @Autowired
+    
+    private ConfigurableNavigationHandler parent;
     private NavigationRuleService navigationRuleService;
 
     private ConfigurableNavigationHandler parent;
 
-    public CustomNavigationHandler(NavigationHandler parent) {
-        if (parent instanceof ConfigurableNavigationHandler) {
-            this.parent = (ConfigurableNavigationHandler) parent;
-        }
+    public CustomNavigationHandler(ConfigurableNavigationHandler parent) {
+        this.parent = parent;
     }
 
     @Override
     public NavigationCase getNavigationCase(FacesContext context, String fromAction, String outcome) {
+        NavigationCase navCase = parent.getNavigationCase(context, fromAction, outcome);
+        if (navCase != null) {
+            return navCase;
+        }
+        // If no result found in local XML, check the database
+        if (navigationRuleService == null) {
+            navigationRuleService = FacesContextUtils.getWebApplicationContext(context).getBean(NavigationRuleService.class);
+        }
+        
         String fromViewId = context.getViewRoot().getViewId();
-        List<NavigationRule> rules = navigationRuleService.getNavigationRules(fromViewId);
+        NavigationRule rules = navigationRuleService.getNavigationRules(fromViewId, outcome);
 
         for (NavigationRule rule : rules) {
             if (rule.getCondition().equals(outcome)) {
-                return new NavigationCase(fromViewId, null, null, null, rule.getToViewId(), null, false);
+                return new NavigationCase(fromViewId, fromAction, outcome, null, rule.getToViewId(), null, false);
             }
         }
-        return parent != null ? parent.getNavigationCase(context, fromAction, outcome) : null;
+        return null;
     }
-
+    @Override
+    public Map<String, Set<NavigationCase>> getNavigationCases() {
+        return parent.getNavigationCases();
+    }
     @Override
     public void handleNavigation(FacesContext context, String fromAction, String outcome) {
-        NavigationCase navCase = getNavigationCase(context, fromAction, outcome);
-        if (navCase != null) {
-            context.getApplication().getNavigationHandler().handleNavigation(context, fromAction, navCase.getToViewId());
-        } else {
-            parent.handleNavigation(context, fromAction, outcome);
+        parent.handleNavigation(context, fromAction, outcome);
+
+        // Check if navigation was handled by the parent
+        if (!context.getResponseComplete()) {
+            // If no result found in local XML, check the database
+            if (tmpDynamicPageService == null) {
+                tmpDynamicPageService = FacesContextUtils.getWebApplicationContext(context).getBean(TmpDynamicPageService.class);
+            }
+
+            String fromViewId = context.getViewRoot().getViewId();
+            TmpSenNavigationRule rule = getNavigationCase(context, fromViewId, outcome);
+            if(rule!= null) {
+            	ViewControllerUtil.setByPassNavigationValidationFlag(true);
+            	parent.handleNavigation(context, fromAction, rule.getToViewId());
+            }
         }
     }
 }
